@@ -145,10 +145,60 @@ async function mint(auth: AconexAuthProps): Promise<string> {
   }
 }
 
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_FILE_HOPS = 3;
+
 export async function sendAconex(
   request: AconexRequest,
 ): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: unknown }> {
   assertAconexUrl(request.url);
+  return sendUnchecked(request);
+}
+
+/**
+ * Document bytes may 302 from api.aconex.com to *.customer-oci.com.
+ * The first hop stays on the API host. Later hops are https only, on
+ * api.aconex.com/api or *.customer-oci.com. The bearer is not sent to OCI.
+ */
+export async function downloadAconexFile(input: {
+  url: string;
+  headers: Record<string, string>;
+  queryParams?: Record<string, string>;
+}): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: unknown }> {
+  let url = input.url;
+  let headers = { ...input.headers };
+  let queryParams = input.queryParams;
+  assertAconexUrl(url);
+  for (let hop = 0; hop <= MAX_FILE_HOPS; hop++) {
+    const response = await sendUnchecked({
+      method: HttpMethod.GET,
+      url,
+      headers,
+      queryParams,
+      responseType: 'stream',
+      timeout: 120_000,
+      followRedirects: false,
+    });
+    queryParams = undefined;
+    if (!REDIRECT_STATUSES.has(response.status)) {
+      return response;
+    }
+    destroyStream(response.body);
+    if (hop === MAX_FILE_HOPS) {
+      throw new AconexError('REDIRECT_REJECTED', 'The document download redirected too many times.');
+    }
+    const next = resolveFileRedirect(url, response.headers);
+    if (fileHostKind(next) === 'oci') {
+      headers = {};
+    }
+    url = next.toString();
+  }
+  throw new AconexError('REDIRECT_REJECTED', 'The document download redirected too many times.');
+}
+
+async function sendUnchecked(
+  request: AconexRequest,
+): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: unknown }> {
   assertNoCredentialQuery(request.queryParams);
   const followRedirects = request.followRedirects === true;
   let lastError: unknown;
@@ -227,6 +277,60 @@ function expiresInSeconds(value: unknown): number {
     return 3600;
   }
   return parsed;
+}
+
+function fileHostKind(url: URL): 'api' | 'oci' | null {
+  if (url.protocol !== 'https:' || url.username || url.password) {
+    return null;
+  }
+  const onApi = url.pathname === '/api' || url.pathname.startsWith('/api/');
+  if (url.hostname === 'api.aconex.com' && onApi) {
+    return 'api';
+  }
+  const host = url.hostname.toLowerCase();
+  if (host === 'customer-oci.com' || host.endsWith('.customer-oci.com')) {
+    return 'oci';
+  }
+  return null;
+}
+
+function resolveFileRedirect(
+  current: string,
+  headers: Record<string, string | string[] | undefined>,
+): URL {
+  const location = firstHeader(headers, 'location');
+  if (!location) {
+    throw new AconexError('REDIRECT_REJECTED', 'The document download redirected without a Location header.');
+  }
+  let next: URL;
+  try {
+    next = new URL(location, current);
+  } catch {
+    throw new AconexError('REDIRECT_REJECTED', 'The document download Location was not a URL.');
+  }
+  if (fileHostKind(next) === null || /(?:^|&)(?:username|password)=/i.test(next.search.slice(1))) {
+    throw new AconexError(
+      'REDIRECT_REJECTED',
+      'The document download redirected to a host this piece does not call.',
+    );
+  }
+  return next;
+}
+
+function firstHeader(
+  headers: Record<string, string | string[] | undefined>,
+  name: string,
+): string | undefined {
+  const raw = headers[name] ?? headers[name.toLowerCase()];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function destroyStream(body: unknown): void {
+  if (body && typeof body === 'object' && 'destroy' in body && typeof body.destroy === 'function') {
+    body.destroy();
+  }
 }
 
 function assertAconexUrl(url: string): void {

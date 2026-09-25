@@ -2,7 +2,7 @@
 
 Community piece for reading [Oracle Aconex](https://help.aconex.com/aconex/aconex-apis/) projects, mail, and documents. It is not an Oracle product and is not endorsed by Oracle. Each connection uses a User-Bound OAuth client that the customer registers. This package does not ship a client id or secret.
 
-The logo URL is `https://cdn.activepieces.com/pieces/aconex.png`. That object may 404 until ActivePieces hosts it. This piece does not vendor an Oracle logo.
+The piece loads `https://cdn.activepieces.com/pieces/aconex.png`. That object is not on the CDN until a maintainer uploads it. The file to upload is `aconex-logo.png` in this directory: a 512×512 original mark, not Oracle's logo and not an Oracle endorsement.
 
 API terms: <https://www.oracle.com/a/ocom/docs/corporate/oracle-aconex-api-terms-110320.pdf>.
 
@@ -95,7 +95,7 @@ This process keeps at most 4 requests in flight and at least 200 ms between star
 
 Basic Auth and Integration IDs are not implemented. Oracle plans to retire Integration IDs toward the beginning of 2027, and Basic Auth returns HTTP 403 for SSO and 2-step accounts. Do not add a second auth method for them.
 
-Mail attachment download and rendition secondary files are not implemented. Document download is the primary backing file only (or the marked-up PDF). It does not send `Accept-Encoding`. The call may redirect to `*.customer-oci.com`; this is the only Aconex call that follows redirects. Fetch removes `Authorization` on a cross-origin redirect. That behavior has not been checked against a live host.
+Mail attachment download and rendition secondary files are not implemented. Document download is the primary backing file only (or the marked-up PDF). It does not send `Accept-Encoding`. The API call does not follow redirects itself. A 301, 302, 303, 307, or 308 is followed only when the next URL is `https://api.aconex.com/api/...` or `https://*.customer-oci.com/...`, at most three hops. The bearer is kept on `api.aconex.com` and is not sent to `customer-oci.com`. Any other host is rejected and not requested.
 
 ## Logs and TLS
 

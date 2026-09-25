@@ -1,7 +1,6 @@
 import { Readable } from 'node:stream';
-import { HttpMethod } from '@activepieces/pieces-common';
 import { createAction, Property } from '@activepieces/pieces-framework';
-import { getAccessToken, sendAconex, ACONEX_API_BASE, assertProjectsPath, currentFileByteCap } from '../client';
+import { getAccessToken, downloadAconexFile, ACONEX_API_BASE, assertProjectsPath, currentFileByteCap } from '../client';
 import { aconexAuth } from '../auth';
 import { assertAuthProps, readAuth } from '../auth-props';
 import { AconexError } from '../errors';
@@ -51,14 +50,10 @@ export const downloadDocumentFileAction = createAction({
     assertProjectsPath(path);
     const token = await getAccessToken(auth);
     const queryParams = context.propsValue.sizeForceFetch === true ? { sizeForceFetch: 'true' } : undefined;
-    const response = await sendAconex({
-      method: HttpMethod.GET,
+    const response = await downloadAconexFile({
       url: `${ACONEX_API_BASE}${path}`,
       queryParams,
       headers: { Authorization: `Bearer ${token}` },
-      responseType: 'stream',
-      timeout: 120_000,
-      followRedirects: true,
     });
     const bytes = await readAtMost(response.body, currentFileByteCap());
     const fileName = safeBaseName(fileNameFromContentDisposition(response.headers) ?? `${documentId}.bin`);

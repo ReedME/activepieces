@@ -42,7 +42,7 @@ describe('download_document_file', () => {
     await expect(runDownload({}, write)).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' });
     expect(write).not.toHaveBeenCalled();
     expect(download?.responseType).toBe('stream');
-    expect(download?.followRedirects).toBe(true);
+    expect(download?.followRedirects).toBe(false);
     expect(download?.retries).toBe(0);
     expect(Object.keys(download?.headers ?? {}).map((key) => key.toLowerCase())).not.toContain('accept-encoding');
     expect(download?.headers).not.toHaveProperty('Content-Length');
@@ -62,6 +62,45 @@ describe('download_document_file', () => {
     });
     await runDownload({}, write);
     expect(write).toHaveBeenCalledWith({ fileName: 'secretfile.pdf', data: Buffer.from('abc') });
+  });
+
+  test('follows an OCI redirect without the bearer and rejects any other host', async () => {
+    const write = vi.fn(async () => 'file://saved');
+    const calls: HttpRequest[] = [];
+    vi.spyOn(httpClient, 'sendRequest').mockImplementation(async (request) => {
+      calls.push(request);
+      if (String(request.url).includes('/auth/token')) {
+        return { status: 200, headers: {}, body: { access_token: 'tok', expires_in: 3600 } };
+      }
+      if (String(request.url).startsWith('https://api.aconex.com/')) {
+        return {
+          status: 302,
+          headers: { location: 'https://files.customer-oci.com/object/doc.bin' },
+          body: Readable.from([]),
+        };
+      }
+      return { status: 200, headers: { 'content-disposition': 'attachment; filename="plan.pdf"' }, body: Readable.from([Buffer.from('pdf')]) };
+    });
+    await runDownload({}, write);
+    const fileCall = calls.find((call) => String(call.url).includes('customer-oci.com'));
+    expect(fileCall?.url).toBe('https://files.customer-oci.com/object/doc.bin');
+    expect(fileCall?.headers).not.toHaveProperty('Authorization');
+    expect(write).toHaveBeenCalledWith({ fileName: 'plan.pdf', data: Buffer.from('pdf') });
+
+    calls.length = 0;
+    vi.spyOn(httpClient, 'sendRequest').mockImplementation(async (request) => {
+      calls.push(request);
+      if (String(request.url).includes('/auth/token')) {
+        return { status: 200, headers: {}, body: { access_token: 'tok', expires_in: 3600 } };
+      }
+      return {
+        status: 302,
+        headers: { location: 'https://evil.example/secret' },
+        body: Readable.from([]),
+      };
+    });
+    await expect(runDownload({}, vi.fn())).rejects.toMatchObject({ code: 'REDIRECT_REJECTED' });
+    expect(calls.some((call) => String(call.url).includes('evil.example'))).toBe(false);
   });
 
   test('retries a throttle response four times', async () => {
